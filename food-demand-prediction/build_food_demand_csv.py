@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-Generate synthetic district-level population & food demand data for Bangladesh (2010-2025)
-with district and area columns, including missing values and anomalies for cleaning/feature engineering practice.
+Generate EXTREMELY VULNERABLE synthetic district-level food demand data for Bangladesh (2010-2025)
+Designed for FULL feature engineering, leakage removal, cleaning, encoding, scaling, outlier handling.
 """
 
 import pandas as pd
 import numpy as np
+import random
+import string
 
-# --- Districts & corresponding areas ---
+np.random.seed(42)
+
 districts_areas = {
     "Dhaka": ["Dhaka North", "Dhaka South", "Gazipur", "Narsingdi"],
     "Chittagong": ["Chittagong City", "Cox's Bazar", "Feni", "Comilla"],
@@ -20,61 +23,70 @@ districts_areas = {
 }
 
 food_types = ["rice", "wheat", "pulses", "meat", "fish", "vegetables"]
+economic_classes = ["low", "middle", "high", None]
 years = list(range(2010, 2026))
+seasons = ["summer", "monsoon", "winter", None]
 
-# --- Generate synthetic data ---
 data = []
-np.random.seed(42)
 
 for district, areas in districts_areas.items():
     for area in areas:
-        base_pop = np.random.randint(100_000, 1_000_000)
-        base_density = np.random.uniform(500, 5000)
+        base_pop = np.random.randint(100_000, 900_000)
+        base_density = np.random.uniform(300, 7000)
+
         for year in years:
-            growth_rate = np.random.uniform(0.011, 0.015)
+            growth_rate = np.random.uniform(0.01, 0.02)
             pop = base_pop * ((1 + growth_rate) ** (year - 2010))
 
-            # Food demand per person (kg/year) with random variation
             food_demand = {}
             for food in food_types:
-                value = np.random.normal(
-                    loc=base_density / 1000 + np.random.uniform(10, 50), scale=5
-                )
-                
-                # Introduce outliers
-                if np.random.rand() < 0.05:  # 5% chance
-                    value *= np.random.choice([0.1, 3, 5])  # extreme low or high
-                # Introduce missing values
-                if np.random.rand() < 0.03:  # 3% chance
+                value = np.random.normal(60, 25)
+
+                if np.random.rand() < 0.07:
+                    value *= random.choice([0.05, 4, 10])
+
+                if np.random.rand() < 0.06:
                     value = np.nan
-                    
+
                 food_demand[food] = max(0, value)
 
-            # Introduce occasional missing population
-            population_val = int(pop)
-            if np.random.rand() < 0.02:
-                population_val = np.nan
+            population = int(pop) if np.random.rand() > 0.03 else np.nan
+            pop_density = round(base_density, 1) if np.random.rand() > 0.04 else np.nan
 
-            # Introduce occasional missing density
-            density_val = round(base_density, 2)
-            if np.random.rand() < 0.02:
-                density_val = np.nan
+            useless_string = "".join(random.choices(string.ascii_letters, k=8))
+            leakage_profit = np.random.randint(5000, 80000)  # DATA LEAKAGE COLUMN
+
+            mixed_temp = (
+                np.random.uniform(25, 40)
+                if np.random.rand() > 0.5
+                else np.random.uniform(70, 110)
+            )
 
             data.append(
                 {
-                    "district": district,
-                    "area": area,
-                    "year": year,
-                    "population": population_val,
-                    "pop_density": density_val,
+                    "district": (
+                        district if np.random.rand() > 0.01 else district.lower()
+                    ),
+                    "area": area if np.random.rand() > 0.01 else None,
+                    "year": year if np.random.rand() > 0.02 else str(year),
+                    "population": population,
+                    "pop_density": pop_density,
+                    "economic_class": random.choice(economic_classes),
+                    "season": random.choice(seasons),
+                    "avg_temperature": mixed_temp,
+                    "random_text": useless_string,
+                    "duplicate_noise": random.choice([1, 1, 1, 999]),
+                    "leakage_future_profit": leakage_profit,
                     **food_demand,
                 }
             )
 
-# --- Create DataFrame and save CSV ---
 df = pd.DataFrame(data)
-csv_path = r"C:\Users\WD-OLY\OneDrive\Desktop\test\food-demand-prediction\bangladesh_food_demand.csv"
+
+df = pd.concat([df, df.sample(80)], ignore_index=True)
+
+csv_path = r"G:\Projects\predicting-house-and-food-demand-in-bangladesh\food-demand-prediction\bangladesh_food_demand.csv"
 df.to_csv(csv_path, index=False)
 
-print(f"Vulnerable CSV file created successfully in:\n{csv_path}")
-print("It includes missing values and some extreme outliers for cleaning/feature engineering practice.")
+print("✅ EXTREMELY vulnerable dataset created successfully!")
+print(csv_path)

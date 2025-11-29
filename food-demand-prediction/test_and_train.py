@@ -1,129 +1,306 @@
 #!/usr/bin/env python3
 """
-Train & evaluate a Regularized RandomForest model to predict district-level food demand
-with feature engineering, per-district cross-validation, and evaluation metrics.
+FULL training & evaluation pipeline for EXTREMELY dirty food demand dataset
+with advanced feature engineering, strong cleaning, lag features,
+district-safe GroupKFold, and high-accuracy RandomForest.
 """
 
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 
 from sklearn.model_selection import GroupKFold
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import mean_absolute_error, r2_score
 
-# --- Load CSV ---
-csv_path = r"food-demand-prediction/bangladesh_food_demand.csv"
+import matplotlib.pyplot as plt
+
+# ============================================================
+# LOAD DATASET
+# ============================================================
+csv_path = r"G:\Projects\predicting-house-and-food-demand-in-bangladesh\food-demand-prediction\bangladesh_food_demand.csv"
 df = pd.read_csv(csv_path)
 
-# --- Feature Engineering & Data Cleaning ---
-num_cols = ["population", "pop_density", "rice", "wheat", "pulses", "meat", "fish", "vegetables"]
+print("\nOriginal Shape:", df.shape)
 
-# 1. Handle missing values for numeric columns
-df[num_cols] = df[num_cols].fillna(df[num_cols].median())
+# ============================================================
+# FIX DATA TYPES
+# ============================================================
+df["year"] = pd.to_numeric(df["year"], errors="coerce")
+df["district"] = df["district"].astype(str).str.strip().str.title()
 
-# 2. Outlier capping (IQR method)
+# ============================================================
+# REMOVE LEAKAGE & TRASH COLUMNS (ONLY IF THEY EXIST)
+# ============================================================
+drop_cols = ["random_text", "duplicate_noise", "leakage_future_profit"]
+df = df.drop(columns=[c for c in drop_cols if c in df.columns])
+
+# ============================================================
+# NUMERIC & CATEGORICAL COLUMNS
+# ============================================================
+food_cols = ["rice", "wheat", "pulses", "meat", "fish", "vegetables"]
+num_cols = ["population", "pop_density", "avg_temperature"] + food_cols
+cat_cols = ["district", "area", "economic_class", "season"]
+
+# ============================================================
+# HANDLE MISSING VALUES
+# ============================================================
 for col in num_cols:
-    Q1 = df[col].quantile(0.25)
-    Q3 = df[col].quantile(0.75)
-    IQR = Q3 - Q1
-    lower = Q1 - 1.5 * IQR
-    upper = Q3 + 1.5 * IQR
-    df[col] = np.clip(df[col], lower, upper)
+    df[col] = df[col].fillna(df[col].median())
 
-# 3. Feature engineering
-df["pop_density_per_1000"] = df["pop_density"] / 1000
-df["year_scaled"] = (df["year"] - df["year"].min()) / (df["year"].max() - df["year"].min())
+for col in cat_cols:
+    df[col] = df[col].fillna(df[col].mode()[0])
 
-# 4. Lag features: previous year food demand per district and area
-df_sorted = df.sort_values(["district", "area", "year"])
-for food in ["rice", "wheat", "pulses", "meat", "fish", "vegetables"]:
-    df_sorted[f"{food}_prev"] = df_sorted.groupby(["district", "area"])[food].shift(1)
+# ============================================================
+# EXTREME OUTLIER CLIPPING (1%–99%)
+# ============================================================
+for col in num_cols:
+    q1 = df[col].quantile(0.01)
+    q99 = df[col].quantile(0.99)
+    df[col] = df[col].clip(q1, q99)
 
-# 5. Fill NaNs in numeric columns only (including lag features)
-numeric_cols = num_cols + [f"{food}_prev" for food in ["rice", "wheat", "pulses", "meat", "fish", "vegetables"]]
-df_sorted[numeric_cols] = df_sorted[numeric_cols].fillna(df_sorted[numeric_cols].median())
+# ============================================================
+# SORT FOR TIME FEATURES
+# ============================================================
+df = df.sort_values(["district", "area", "year"]).reset_index(drop=True)
 
-# --- Features & Targets ---
-features = ["population", "pop_density", "pop_density_per_1000", "year_scaled",
-            "rice_prev", "wheat_prev", "pulses_prev", "meat_prev", "fish_prev", "vegetables_prev"]
-targets = ["rice", "wheat", "pulses", "meat", "fish", "vegetables"]
+# ============================================================
+# ADVANCED FEATURE ENGINEERING
+# ============================================================
+df["protein_demand"] = df["meat"] + df["fish"] + df["pulses"]
+df["total_food_demand"] = df[food_cols].sum(axis=1)
+df["per_capita_demand"] = df["total_food_demand"] / df["population"]
+df["is_urban"] = (df["pop_density"] > 2500).astype(int)
 
-X = df_sorted[features]
-y = df_sorted[targets]
-groups = df_sorted["district"]
+df["year_scaled"] = (df["year"] - df["year"].min()) / (
+    df["year"].max() - df["year"].min()
+)
 
-# --- Grouped cross-validation per district ---
-gkf = GroupKFold(n_splits=len(df["district"].unique()))
-print("=== Per-District Cross-Validation Metrics ===")
+# ============================================================
+# SAFE LAG + ROLLING FEATURES (NO INDEX ERRORS)
+# ============================================================
+for food in food_cols:
+    df[f"{food}_lag1"] = df.groupby(["district", "area"])[food].shift(1)
 
-for train_idx, test_idx in gkf.split(X, y, groups=groups):
+    df[f"{food}_roll3"] = df.groupby(["district", "area"])[food].transform(
+        lambda x: x.rolling(3, min_periods=1).mean()
+    )
+
+lag_cols = [f"{f}_lag1" for f in food_cols] + [f"{f}_roll3" for f in food_cols]
+
+for col in lag_cols:
+    df[col] = df[col].fillna(df[col].median())
+
+df["district_name"] = df["district"].copy()
+
+# ============================================================
+# ENCODING CATEGORICAL FEATURES
+# ============================================================
+le = LabelEncoder()
+for col in cat_cols:
+    df[col] = le.fit_transform(df[col])
+
+# ============================================================
+# SCALING NUMERICAL FEATURES
+# ============================================================
+scale_cols = ["population", "pop_density", "avg_temperature"]
+scaler = StandardScaler()
+df[scale_cols] = scaler.fit_transform(df[scale_cols])
+
+# ============================================================
+# FINAL FEATURE SET & TARGET
+# ============================================================
+feature_cols = (
+    ["population", "pop_density", "avg_temperature", "year_scaled", "is_urban"]
+    + lag_cols
+    + ["protein_demand", "per_capita_demand"]
+)
+
+X = df[feature_cols]
+y = df["total_food_demand"]
+groups = df["district"]
+
+# ============================================================
+# DISTRICT-SAFE GROUP K-FOLD
+# ============================================================
+gkf = GroupKFold(n_splits=5)
+
+r2_scores = []
+mae_scores = []
+
+print("\n=== DISTRICT-SAFE CROSS VALIDATION ===")
+
+for fold, (train_idx, test_idx) in enumerate(gkf.split(X, y, groups), 1):
     X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
     y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
-    district_name = groups.iloc[test_idx].unique()[0]
 
-    # --- Train Regularized Random Forest ---
     model = RandomForestRegressor(
-        n_estimators=300,
-        max_depth=10,
-        min_samples_split=5,
-        min_samples_leaf=3,
-        max_features='sqrt',
-        random_state=42
+        n_estimators=350,
+        max_depth=14,
+        min_samples_split=6,
+        min_samples_leaf=5,
+        max_features="sqrt",
+        random_state=42,
+        n_jobs=-1,
     )
+
     model.fit(X_train, y_train)
+    preds = model.predict(X_test)
 
-    # --- Predict & Evaluate ---
-    y_pred = model.predict(X_test)
-    print(f"\nDistrict: {district_name}")
-    for i, food in enumerate(targets):
-        mse = mean_squared_error(y_test[food], y_pred[:, i])
-        rmse = np.sqrt(mse)
-        mae = mean_absolute_error(y_test[food], y_pred[:, i])
-        r2 = r2_score(y_test[food], y_pred[:, i])
-        print(f"{food}: MSE={mse:.2f}, RMSE={rmse:.2f}, MAE={mae:.2f}, R2={r2:.2f}")
+    r2 = r2_score(y_test, preds)
+    mae = mean_absolute_error(y_test, preds)
 
-# --- Train final model on full dataset ---
+    r2_scores.append(r2)
+    mae_scores.append(mae)
+
+    print(f"Fold {fold} → R2: {r2:.3f} | MAE: {mae:.2f}")
+
+# ============================================================
+# FINAL PERFORMANCE
+# ============================================================
+print("\nFINAL MODEL PERFORMANCE")
+print("Average R2 Score:", round(np.mean(r2_scores), 3))
+print("Average MAE:", round(np.mean(mae_scores), 2))
+
+# ============================================================
+# TRAIN FINAL MODEL ON FULL DATASET
+# ============================================================
 final_model = RandomForestRegressor(
-    n_estimators=300,
-    max_depth=10,
-    min_samples_split=5,
-    min_samples_leaf=3,
-    max_features='sqrt',
-    random_state=42
+    n_estimators=400,
+    max_depth=14,
+    min_samples_split=6,
+    min_samples_leaf=5,
+    max_features="sqrt",
+    random_state=42,
+    n_jobs=-1,
 )
+
 final_model.fit(X, y)
 
-# --- Predict on full dataset ---
-df_pred = df_sorted.copy()
-df_pred[targets] = final_model.predict(X)
+print("\n✅ Final model trained on FULL dataset!")
 
-# --- Aggregate actual and predicted by district ---
-df_actual = df_sorted.groupby(["district", "year"])[targets].sum().reset_index()
-df_district = df_pred.groupby(["district", "year"])[targets].sum().reset_index()
 
-# --- Plot per district per food with metrics ---
-for food in targets:
-    for district in df_actual["district"].unique():
-        subset_actual = df_actual[df_actual["district"] == district]
-        subset_pred = df_district[df_district["district"] == district]
+# ============================================================
+# FUNCTION 1: ACTUAL vs PREDICTED (DISTRICT-WISE FIGURES)
+# ============================================================
+def show_actual_vs_predicted_per_district_plot(df, model, feature_cols, food_cols):
+    df_eval = df.copy()
+    df_eval["predicted_total"] = model.predict(df_eval[feature_cols])
 
-        # --- Metrics per district per food ---
-        mse = mean_squared_error(subset_actual[food], subset_pred[food])
-        rmse = np.sqrt(mse)
-        mae = mean_absolute_error(subset_actual[food], subset_pred[food])
-        r2 = r2_score(subset_actual[food], subset_pred[food])
-        print(f"\nFinal Metrics - District: {district}, Food: {food}")
-        print(f"MSE={mse:.2f}, RMSE={rmse:.2f}, MAE={mae:.2f}, R2={r2:.2f}")
+    food_ratio = df[food_cols].div(df[food_cols].sum(axis=1), axis=0)
 
-        # --- Plot ---
-        plt.figure(figsize=(8, 5))
-        plt.plot(subset_actual["year"], subset_actual[food], 'o--', color='blue', label='Actual')
-        plt.plot(subset_pred["year"], subset_pred[food], 'o-', color='orange', label='Predicted')
-        plt.title(f"{food.capitalize()} Demand: {district} (2010-2025)")
-        plt.xlabel("Year")
-        plt.ylabel(f"{food.capitalize()} Demand (kg/year)")
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.show()
+    for food in food_cols:
+        df_eval[f"pred_{food}"] = df_eval["predicted_total"] * food_ratio[food]
+
+    actual = df.groupby(["district_name", "year"])[food_cols].sum().reset_index()
+
+    predicted = (
+        df_eval.groupby(["district_name", "year"])[[f"pred_{f}" for f in food_cols]]
+        .sum()
+        .reset_index()
+    )
+
+    districts = actual["district_name"].unique()
+
+    for district in districts:
+        actual_d = actual[actual["district_name"] == district]
+        pred_d = predicted[predicted["district_name"] == district]
+
+        for food in food_cols:
+            plt.figure(figsize=(8, 5))
+
+            plt.plot(actual_d["year"], actual_d[food])
+            plt.plot(pred_d["year"], pred_d[f"pred_{food}"])
+
+            plt.title(f"{district} - {food.capitalize()} Demand (Actual vs Predicted)")
+            plt.xlabel("Year")
+            plt.ylabel("Demand")
+            plt.legend(["Actual", "Predicted"])
+            plt.grid(True)
+            plt.tight_layout()
+            plt.show()
+
+
+# ============================================================
+# FUNCTION 2: FUTURE FOOD DEMAND (BANGLADESH FIGURE)
+# ============================================================
+def predict_future_bangladesh_plot(
+    df, model, feature_cols, food_cols, start_year=2026, end_year=2035
+):
+    df_future = df.copy()
+
+    # Extract last known state per district-area
+    last_rows = (
+        df_future.sort_values("year")
+        .groupby(["district", "area"])
+        .tail(1)
+        .reset_index(drop=True)
+    )
+
+    future_all = []
+
+    for year in range(start_year, end_year + 1):
+
+        temp = last_rows.copy()
+
+        # Year update + scaling
+        temp["year"] = year
+        temp["year_scaled"] = (year - df["year"].min()) / (
+            df["year"].max() - df["year"].min()
+        )
+
+        # Population growth model (1.1% annual)
+        temp["population"] = temp["population"] * 1.011
+
+        # Temperature drift
+        temp["avg_temperature"] = temp["avg_temperature"] + 0.02
+
+        # Lag update using PREVIOUS PREDICTION, not real values
+        for food in food_cols:
+            temp[f"{food}_lag1"] = temp[f"{food}_roll3"]
+
+        # Predict total food demand
+        temp["predicted_total"] = model.predict(temp[feature_cols])
+
+        # Dynamic national food ratios (trend preserving)
+        rolling_ratio = (
+            df.groupby("year")[food_cols].sum().tail(5).mean()
+            / df.groupby("year")[food_cols].sum().tail(5).mean().sum()
+        )
+
+        for food in food_cols:
+            temp[food] = temp["predicted_total"] * rolling_ratio[food]
+
+        # Recompute engineered features (ABSOLUTELY REQUIRED)
+        temp["protein_demand"] = temp["meat"] + temp["fish"] + temp["pulses"]
+        temp["total_food_demand"] = temp[food_cols].sum(axis=1)
+        temp["per_capita_demand"] = temp["total_food_demand"] / temp["population"]
+
+        # Roll forward
+        last_rows = temp.copy()
+        future_all.append(temp)
+
+    future_df = pd.concat(future_all, ignore_index=True)
+
+    # NATIONAL AGGREGATION
+    national_forecast = future_df.groupby("year")[food_cols].sum().reset_index()
+
+    # NATIONAL PLOT
+    plt.figure(figsize=(12, 7))
+
+    for food in food_cols:
+        plt.plot(national_forecast["year"], national_forecast[food], linewidth=2)
+
+    plt.title("Corrected Future Food Demand Forecast for Bangladesh")
+    plt.xlabel("Year")
+    plt.ylabel("Total National Demand")
+    plt.legend(food_cols)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+    return national_forecast
+
+
+# show_actual_vs_predicted_per_district_plot(df, final_model, feature_cols, food_cols)
+predict_future_bangladesh_plot(df, final_model, feature_cols, food_cols)
