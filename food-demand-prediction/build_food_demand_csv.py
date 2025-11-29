@@ -85,7 +85,8 @@ df = pd.DataFrame(data)
 
 df = pd.concat([df, df.sample(80)], ignore_index=True)
 
-csv_path = r"G:\Projects\predicting-house-and-food-demand-in-bangladesh\food-demand-prediction\bangladesh_food_demand.csv"
+script_dir = os.path.dirname(os.path.abspath(__file__)) 
+csv_path = os.path.join(script_dir, "bangladesh_food_demand.csv")
 df.to_csv(csv_path, index=False)
 
 print("✅ EXTREMELY vulnerable dataset created successfully!")

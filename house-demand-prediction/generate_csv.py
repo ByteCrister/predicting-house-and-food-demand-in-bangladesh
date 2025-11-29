@@ -90,9 +90,8 @@ df = df.sample(frac=1, random_state=42).reset_index(drop=True)
 # ===============================
 # SAVE TO CSV
 # ===============================
-out_dir = "house-demand-prediction"
-os.makedirs(out_dir, exist_ok=True)
-csv_path = os.path.join(out_dir, "bangladesh_house_demand_20k.csv")
+script_dir = os.path.dirname(os.path.abspath(__file__)) 
+csv_path = os.path.join(script_dir, "bangladesh_house_demand.csv")
 df.to_csv(csv_path, index=False)
 
 print(f"Synthetic vulnerable dataset saved to {csv_path}")

@@ -7,6 +7,7 @@ district-safe GroupKFold, and high-accuracy RandomForest.
 
 import pandas as pd
 import numpy as np
+import os
 
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import LabelEncoder, StandardScaler
@@ -18,7 +19,8 @@ import matplotlib.pyplot as plt
 # ============================================================
 # LOAD DATASET
 # ============================================================
-csv_path = r"G:\Projects\predicting-house-and-food-demand-in-bangladesh\food-demand-prediction\bangladesh_food_demand.csv"
+script_dir = os.path.dirname(os.path.abspath(__file__))
+csv_path = os.path.join(script_dir, "bangladesh_food_demand.csv")
 df = pd.read_csv(csv_path)
 
 print("\nOriginal Shape:", df.shape)

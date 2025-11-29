@@ -9,6 +9,8 @@ Train & Evaluate House Demand Prediction Model
 
 import pandas as pd
 import numpy as np
+import os
+
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.ensemble import RandomForestRegressor
@@ -18,8 +20,10 @@ import matplotlib.pyplot as plt
 # ===============================
 # LOAD DATA
 # ===============================
-csv_path = "house-demand-prediction/bangladesh_house_demand_20k.csv"
+script_dir = os.path.dirname(os.path.abspath(__file__))
+csv_path = os.path.join(script_dir, "bangladesh_house_demand.csv")
 df = pd.read_csv(csv_path)
+
 print("Original Shape:", df.shape)
 
 # ===============================
