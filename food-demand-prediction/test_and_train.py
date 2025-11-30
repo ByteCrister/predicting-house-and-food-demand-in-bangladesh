@@ -304,5 +304,5 @@ def predict_future_bangladesh_plot(
     return national_forecast
 
 
-# show_actual_vs_predicted_per_district_plot(df, final_model, feature_cols, food_cols)
-predict_future_bangladesh_plot(df, final_model, feature_cols, food_cols)
+show_actual_vs_predicted_per_district_plot(df, final_model, feature_cols, food_cols)
+# predict_future_bangladesh_plot(df, final_model, feature_cols, food_cols)
